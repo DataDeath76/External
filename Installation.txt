@@ -1,0 +1,13 @@
+1. Copy file WinUtils.zip to application server and unzip it
+2. Copy files 
+     bcprov-jdk15on-1.63.jar
+     jcifs-ng-2.1.8.jar
+     XXLPR_WIN_UTILS.jar
+   into $XXLPR_TOP/java/jar directory
+3. Copy file
+     xxlpr_command.sql
+   into $XXLPR_TOP/sql direcory
+4. Copy files
+     XXLPR_IMPORT_WIN_PRINTERS.prog
+     direct_print_WINDOWS.sh
+   into $XXLPR_TOP/bin direcory

@@ -1,0 +1,397 @@
+#!/bin/ksh
+
+# $Id: XXLPR_IMPORT_WIN_PRINTERS.prog 1735 2011-11-30 15:03:40Z testuser $
+# Copyright Unitask Inc 1999-2006
+
+
+. $XXLPR_TOP/bin/setenv.sh
+
+
+echo "About to import printers...." `date`
+
+set +e
+
+APPS_LOGON=$1
+export APPS_LOGON
+DB_USER=`echo $APPS_LOGON | $AWK '{print substr($0,1,index($0,"/")-1)}'`
+export DB_USER
+echo "DB_USER="$DB_USER
+
+DB_PWD=`echo $APPS_LOGON | $AWK '{print substr($0,index($0,"/")+1)}'`
+export DB_PWD
+
+# Samba
+SMB_SERVER=$5
+echo "SMB_SERVER=$SMB_SERVER"
+SMB_USER=$6
+SMB_USER=`echo $SMB_USER | sed 's/\^/\\\\/g'`
+echo "SMB_USER=$SMB_USER"
+SMB_PASS=$7
+SMB_PASS=`echo $DB_PWD | $SQLPLUS $DB_USER @$XXLPR_TOP/sql/xxlpr_win_prnt_util.sql "${SMB_PASS}" | grep -v "^$" | grep -v password`
+SMB_PASS=`echo $SMB_PASS`
+
+echo "TWO_TASK=$TWO_TASK"
+
+# Printer language
+PRNT_LANG=$8
+echo "PRNT_LANG=$PRNT_LANG"
+
+
+
+APPS_USERID=$2
+echo "APPS_USERID="$APPS_USERID
+
+
+
+FORCE_UPDATE=$9
+echo "FORCE_UPDATE="$FORCE_UPDATE
+
+KEEP_OA_PRINTER=${10}
+echo "KEEP_OA_PRINTER="$KEEP_OA_PRINTER
+
+
+if [ "${KEEP_OA_PRINTER}" != "Y" ]
+then
+   KEEP_OA_PRINTER=N
+fi
+
+if [ "${FORCE_UPDATE}" = "Y" ]
+then
+IMPORT_MODE="CUSTOM_MODE=FORCE"
+else
+IMPORT_MODE="CUSTOM_MODE=REGULAR"
+fi
+
+PRINTER_PATTERN=${11}
+export PRINTER_PATTERN
+
+DBC=`echo $DB_PWD | $SQLPLUS $DB_USER @$XXLPR_TOP/sql/get_dbc_file.sql | grep -v "^$" | grep -v password`
+DBC=`echo $DBC`
+
+cat $FND_SECURE/$DBC.dbc | tr -d "\\\\" > $FND_SECURE/$DBC.dbc.tmp
+
+JDBC=`cat $FND_SECURE/$DBC.dbc.tmp | grep APPS_JDBC_URL | $AWK '{print substr($0,index($0,"=")+1)}'`
+rm $FND_SECURE/$DBC.dbc.tmp
+JDBC=`echo $JDBC`
+
+if [ "${JDBC}" = "" ]
+then
+  JDBC="jdbc:oracle:thin:@(DESCRIPTION=(LOAD_BALANCE=YES)(FAILOVER=YES)(ADDRESS_LIST=(ADDRESS=(PROTOCOL=tcp)(HOST=${DB_HOST})(PORT=${DB_PORT})))(CONNECT_DATA=(SID=${TWO_TASK})))"
+fi
+
+
+
+echo "JDBC_CONNECTION_STRING=$JDBC"
+
+CLASSPATH=$OA_JAVA:$XXLPR_TOP/java/jar/jdbc.jar:$XXLPR_TOP/java/jar/bcprov-jdk15on-1.63.jar:$XXLPR_TOP/java/jar/jcifs-ng-2.1.8.jar:$XXLPR_TOP/java/jar/xmlparserv2-904.zip:$XXLPR_TOP/java/jar/XXLPR_WIN_UTILS.jar:$CLASSPATH
+export CLASSPATH
+#get usage /UOD/NATIVE
+
+USAGE=`$SQLPLUS $APPS_LOGON @$XXLPR_TOP/sql/xxlpr_smb_usage.sql`
+
+
+
+USAGE=`echo $USAGE`
+
+if [ "${USAGE}" = "N" ]
+then
+echo "$JAVA_JRE -mx1024m unitask.oracle.apps.xxlpr.winutils.WinToOAPrinterHandler \"$JDBC\" $DB_USER ****** $FND_TOP/patch/115/import/afcppinf.lct $SMB_SERVER $6 **** $APPS_USERID -1 $PRNT_LANG $XXLPR_TOP/conf/conf.xml $FORCE_UPDATE" "${KEEP_OA_PRINTER}" "${PRINTER_PATTERN}"
+$JAVA_JRE -mx1024m unitask.oracle.apps.xxlpr.winutils.WinToOAPrinterHandler "$JDBC" $DB_USER $DB_PWD $FND_TOP/patch/115/import/afcppinf.lct "$SMB_SERVER" "$6" "$SMB_PASS" $APPS_USERID -1 $PRNT_LANG $XXLPR_TOP/conf/conf.xml "$FORCE_UPDATE" "${KEEP_OA_PRINTER}" "${PRINTER_PATTERN}"
+  if [ $? -eq 0 ]
+  then
+     exit 0
+  else
+     exit 1
+  fi
+fi; # end if use native smb client = N
+
+
+
+#temporary directory
+if [ "${APPLTMP}" = "" ]
+then
+   APPLTMP=/tmp 
+fi; 
+#create FNDLOAD file
+FNDLOAD ${APPS_LOGON} 0 Y DOWNLOAD $FND_TOP/patch/115/import/afcppinf.lct $APPLTMP/xxlpr_printer_tmp_file.ldt FND_PRINTER PRINTER_NAME=LOCAL_PRINT
+rm *.log
+
+REPLACE_STRING=`cat $APPLTMP/xxlpr_printer_tmp_file.ldt | grep -i "description.*print to default printer" | $AWK -F"=" '{ print $2 }'`
+REPLACE_STRING=`echo $REPLACE_STRING`
+
+
+
+
+PRINTER_FILE=$$
+# get list of printers
+echo "get list of printers "`date`
+smbclient -L "${SMB_SERVER}" -U ${SMB_USER}%${SMB_PASS}  | grep -i Printer | grep -v -i "Printer Drivers" | sed 's/   /%/g'  > $APPLTMP/PRINTER_FILE
+if [ $? -ne 0 ]
+then
+  echo ""
+  echo "Error listing shared printers"
+  echo ""
+fi
+
+if [ -f $APPLTMP/PRINTER_FILE ]
+then
+SIZE=`cat $APPLTMP/PRINTER_FILE`
+
+if [ "${SIZE}" = "" ]
+then
+   set -e
+   smbclient -L "${SMB_SERVER}" -U ${SMB_USER}%${SMB_PASS} --netbiosname "${SMB_SERVER}"
+   set +e
+fi
+fi
+
+PROC=$$
+cp $APPLTMP/PRINTER_FILE $APPLTMP/PRINTER_FILE.${PROC}.org
+cat $APPLTMP/PRINTER_FILE |while read NODENAME
+do
+# check if last word is "Printer". If it does, remove it
+LAST_WORD=`echo $NODENAME | $AWK -F"%" '{ print $1 }' | sed 's/.* //'`
+TEXT=$NODENAME
+if [ "${LAST_WORD}" = "Printer" ]
+then
+echo $NODENAME | $AWK -F"%" '{ print $1 }' | sed '$s/ *\([^ ]* *\)$//' >> $APPLTMP/PRINTER_FILE.${PROC}
+else
+echo $NODENAME | $AWK -F"%" '{ print $1 }' >> $APPLTMP/PRINTER_FILE.${PROC}
+fi
+done
+   mv $APPLTMP/PRINTER_FILE.${PROC} $APPLTMP/PRINTER_FILE
+echo ""
+
+#filter printers
+
+if [ "${PRINTER_PATTERN}" != "" ]
+then
+   cat $APPLTMP/PRINTER_FILE | grep "${PRINTER_PATTERN}" > $APPLTMP/PRINTER_FILE.${PROC}
+   mv $APPLTMP/PRINTER_FILE.${PROC} $APPLTMP/PRINTER_FILE
+fi
+
+
+X=`cat $APPLTMP/PRINTER_FILE | $AWK -F"%" '{ print $1 }' | grep " " | wc -l`
+if [ $X -ne 0 ]
+then
+echo "=================================================================================="
+echo "The following printers have illegal characters (whitespace, /, \\) and will not be imported"
+      cat $APPLTMP/PRINTER_FILE | $AWK -F"%" '{ print $1 }' | grep " "
+      cat $APPLTMP/PRINTER_FILE | $AWK -F"%" '{ print $1 }' | grep -v " " > $APPLTMP/PRINTER_FILE.${PROC}
+      mv $APPLTMP/PRINTER_FILE.${PROC} $APPLTMP/PRINTER_FILE
+fi
+echo ""
+echo "=================================================================================="
+echo "List of printers....." `date`
+cat $APPLTMP/PRINTER_FILE | $AWK -F"%" '{ print $1 }'
+
+PRC=$$
+PRINT_DEF_FILE=$APPLTMP/def$PRC
+PRINT_CONT_FILE=$APPLTMP/con$PRC
+PRNT_SQL=$APPLTMP/sql$PRC.sql
+
+IS_FOUND=false
+export IS_FOUND
+
+cat $APPLTMP/xxlpr_printer_tmp_file.ldt | sed 's/\\/^/g' > $APPLTMP/xxlpr_printer_tmp_file.ldt.tmp
+mv $APPLTMP/xxlpr_printer_tmp_file.ldt.tmp $APPLTMP/xxlpr_printer_tmp_file.ldt
+
+cat $APPLTMP/xxlpr_printer_tmp_file.ldt |while read NODENAME
+do
+   X=`echo  $NODENAME | grep -i "End Entity Definitions" | wc -l`
+   if [ $X -eq 1 ]
+   then
+      IS_FOUND=true
+   fi
+   if [ $X -eq 0 ] && [ "$IS_FOUND" = "false" ]
+   then
+      echo "$NODENAME" >> $PRINT_DEF_FILE
+    else
+      echo "$NODENAME" >> $PRINT_CONT_FILE	
+   fi
+done
+
+
+
+if [ "${KEEP_OA_PRINTER}" = "Y" ]
+then
+
+TABLE=TAB_$$_1
+echo "create table $TABLE (printer varchar2(100),text varchar2(1000)); " >> $APPLTMP/$TABLE
+cat $APPLTMP/PRINTER_FILE |while read NODENAME
+do
+# check if last word is "Printer". If it does, remove it
+LAST_WORD=`echo $NODENAME | sed 's/.* //'`
+TEXT=$NODENAME
+if [ "${LAST_WORD}" = "Printer" ]
+then
+NODENAME=`echo $NODENAME | sed '$s/ *\([^ ]* *\)$//'`
+fi
+# check if printer exists in OA
+NODENAME="${NODENAME%%\%*}"
+
+echo "insert into $TABLE  values ('$NODENAME','$TEXT');" >> $APPLTMP/$TABLE
+
+done
+
+echo "commit;" >> $APPLTMP/$TABLE
+
+mv $APPLTMP/$TABLE $APPLTMP/$TABLE.sql
+
+PRNT_TMP=temp_printers.txt
+
+CREATE_SCRIPT=$APPLTMP/$TABLE.sql
+$SQLPLUS $APPS_LOGON @$XXLPR_TOP/sql/spool_win_printers.sql $CREATE_SCRIPT $TABLE $PRNT_TMP
+
+
+cat $PRNT_TMP | grep -v '^[ ]*\\n\\' > $PRNT_TMP.tmp
+cat $PRNT_TMP.tmp | sed -e 's/^[ \t]*//' | sed '/^$/d' > $PRNT_TMP
+
+mv $PRNT_TMP $APPLTMP/PRINTER_FILE
+fi # if KEEP_OA_PRINTER = "Y"
+
+echo ""
+cp $APPLTMP/PRINTER_FILE.${PROC}.org /tmp/2.txt
+cat $APPLTMP/PRINTER_FILE |while read NODENAME
+do
+# check if last word is "Printer". If it does, remove it
+LAST_WORD=`echo $NODENAME | sed 's/.* //'`
+if [ "${LAST_WORD}" = "Printer" ]
+then
+NODENAME=`echo $NODENAME | sed '$s/ *\([^ ]* *\)$//'`
+fi
+
+CURR_PR=`echo $NODENAME | $AWK -F"%" '{ print $1 }'`
+
+COMMENT=`cat $APPLTMP/PRINTER_FILE.${PROC}.org | grep "$CURR_PR " |  $AWK -F"%" '{ print $NF }'`
+if [ "${COMMENT}" = "" ]
+then
+COMMENT=`cat $APPLTMP/PRINTER_FILE.${PROC}.org | grep "$CURR_PR%" |  $AWK -F"%" '{ print $NF }'`
+fi
+if [ "${CURR_PR}" = "${COMMENT}" ] 
+then
+COMMENT=""
+fi
+
+COMMENT=`echo "$COMMENT" | sed s#/##g`
+
+echo ""
+echo "Processing printer: `echo $NODENAME | $AWK -F"%" '{ print $1 }'`" `date`
+# check if printer exists in OA
+NODENAME="${NODENAME%%\%*}"
+
+
+cat $PRINT_CONT_FILE | sed s/LOCAL_PRINT/"$NODENAME"/g | sed s/"$REPLACE_STRING"/"\"${COMMENT}\""/g  >>  $PRINT_DEF_FILE
+
+
+if [ "${FORCE_UPDATE}" = "Y" ]
+then
+   X="FORCE"
+else
+   X="UPDATE"
+fi
+
+X=`echo $X`
+
+if [ "$X" = "UPDATE" ]
+then
+echo "declare " >> $PRNT_SQL
+echo "   l_exists varchar2(100); " >> $PRNT_SQL
+echo " begin " >> $PRNT_SQL
+echo "   select 1 " >> $PRNT_SQL
+echo "  into   l_exists" >> $PRNT_SQL
+print "   from   xxlpr_printers where printer_name = '$NODENAME';" >> $PRNT_SQL
+echo "exception " >> $PRNT_SQL
+echo "   when no_data_found then " >> $PRNT_SQL
+print "      insert into xxlpr_printers (printer_name, printer_host,port,PRINTER_LANGUAGE,LAST_UPDATED_BY,LAST_UPDATE_DATE,CREATED_BY,CREATION_DATE,PROTOCOL,attribute1,attribute2, ENABLED, TYPE,DUPLEX,PAPER_TYPE_CODE, PAPER_SIZE_W, PAPER_SIZE_H) values  ('$NODENAME','$SMB_SERVER',9100,'$PRNT_LANG', $APPS_USERID,sysdate, $APPS_USERID,sysdate,'WINDOWS','$6','$7','Y', 'PRINTER','N', 'A4', 595, 842);" >> $PRNT_SQL
+echo "end; " >> $PRNT_SQL
+echo "/"  >> $PRNT_SQL
+fi #end if printer doesn't exist in UOD
+
+
+if [ "$X" != "UPDATE" ]
+then
+echo "declare " >> $PRNT_SQL
+echo "   l_exists varchar2(100); " >> $PRNT_SQL
+echo " begin " >> $PRNT_SQL
+echo "   select 1 " >> $PRNT_SQL
+echo "  into   l_exists" >> $PRNT_SQL
+print "   from   xxlpr_printers where printer_name = '$NODENAME';" >> $PRNT_SQL
+echo "           update xxlpr_printers" >> $PRNT_SQL
+echo "   		set    printer_host = '$SMB_SERVER'," >> $PRNT_SQL
+echo "          PRINTER_LANGUAGE = '$PRNT_LANG'," >> $PRNT_SQL
+echo "          attribute1='$6'," >> $PRNT_SQL
+echo "   	   attribute2= '$7'," >> $PRNT_SQL
+echo "   	   LAST_UPDATED_BY = $APPS_USERID," >> $PRNT_SQL
+echo "   	   LAST_UPDATE_DATE = sysdate," >> $PRNT_SQL
+echo "          PROTOCOL = 'WINDOWS'," >> $PRNT_SQL
+echo "          TYPE='PRINTER'" >> $PRNT_SQL
+print "          where  	printer_name = 	'$NODENAME';	   " >> $PRNT_SQL
+echo "exception " >> $PRNT_SQL
+echo "   when no_data_found then " >> $PRNT_SQL
+print "      insert into xxlpr_printers (printer_name, printer_host,port,PRINTER_LANGUAGE,LAST_UPDATED_BY,LAST_UPDATE_DATE,CREATED_BY,CREATION_DATE,PROTOCOL,attribute1,attribute2, ENABLED, TYPE,DUPLEX,PAPER_TYPE_CODE, PAPER_SIZE_W, PAPER_SIZE_H) values  ('$NODENAME','$SMB_SERVER',9100,'$PRNT_LANG', $APPS_USERID,sysdate, $APPS_USERID,sysdate,'WINDOWS','$6','$7','Y', 'PRINTER','N', 'A4', 595, 842);" >> $PRNT_SQL
+echo "end; " >> $PRNT_SQL
+echo "/"  >> $PRNT_SQL
+fi #end if printer doesn't exist in UOD
+
+echo "Printer processed "`date`
+echo ""
+	
+done; # end loop printers list
+
+
+echo "commit" >> $PRNT_SQL
+echo "/" >> $PRNT_SQL
+echo "exit" >> $PRNT_SQL
+
+$SQLPLUS $APPS_LOGON @$PRNT_SQL
+
+
+if [ "$USAGE" = "Y" ]
+then
+   #upload new printer with FNDLOAD
+   cat $PRINT_DEF_FILE | sed 's/\^/\\/g' > $PRINT_DEF_FILE.tmp
+   mv $PRINT_DEF_FILE.tmp $PRINT_DEF_FILE
+   echo "FNDLOAD ***** 0 Y UPLOAD $FND_TOP/patch/115/import/afcppinf.lct $PRINT_DEF_FILE - ${IMPORT_MODE}"
+   FNDLOAD ${APPS_LOGON} 0 Y UPLOAD $FND_TOP/patch/115/import/afcppinf.lct $PRINT_DEF_FILE - ${IMPORT_MODE}
+   if [ -e *.log ]
+   then
+   LOG_FILE=`ls *.log`
+   export LOG_FILE
+   echo "Log File-"$LOG_FILE":"
+   echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
+   cat $LOG_FILE
+   echo "+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
+   echo
+   fi #end if log file exists  
+fi;
+echo "FNDLOAD upload compeleted "`date`
+
+if [ -f $APPLTMP/PRINTER_FILE ]
+then
+rm $APPLTMP/PRINTER_FILE
+fi
+
+if [ -f $APPLTMP/PRINTER_FILE.${PROC}.org ]
+then
+rm $APPLTMP/PRINTER_FILE.${PROC}.org
+fi
+
+if [ -f $PRNT_SQL ]
+then
+rm $PRNT_SQL
+fi
+
+if [ -f $PRINT_DEF_FILE ]
+then
+rm $PRINT_DEF_FILE
+fi
+
+if [ -f $PRINT_CONT_FILE ]
+then
+rm $PRINT_CONT_FILE
+fi
+
+
+
+

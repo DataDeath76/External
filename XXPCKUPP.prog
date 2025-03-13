@@ -1,0 +1,1012 @@
+#!/bin/ksh
+# $Id: XXPCKUPP.prog 1466 2011-08-28 11:16:51Z mshapira $
+# Copyright Unitask Inc., 1999-2014. All rights reserved
+# $Revision: 1466 $
+#
+
+#===============================================================================
+#
+#  NAME                 : XXPCKUPP.prog
+#  
+#  DESCRIPTION          : 
+#
+#  AUTHOR               : GUy Lior
+#
+#  CREATION DATE        : 03/11/2003
+#
+#  REVISIONS
+#
+# |REV| WHO | DATE       | CHANGE
+# +---+-----+------------+-----------------------------------------------
+# | A | AMP | 2014-08-22 | Fixed rm statements 
+# |   |     |            |
+# +---+-----+------------+-----------------------------------------------
+#
+#
+#  PARAMETERS
+#           : APPS_LOGON      $1 - DB Userid and Password
+#			: APPS_USERID     $2 - Application User Id
+#			: APPS_USERNAME   $3 - Application User Name
+#			: APPS_CONCID     $4 - Concurrent Request Id
+#			: PKG_FILE_NAME   $5 - Package file name to upload
+#			: WORK_DIR        $6 - Working Directory
+#			: INBOUND_DIR     $7 - Inbound Directory
+#			: TARGET_HOST     $8 - Target Host
+#			: DOWNLOAD_HOST   $9 - Download Host
+#			: GLOBAL1         $10 - Global1
+#			: GLOBAL2         $11 - Global2
+#			: GLOBAL3         $12 - Global3
+#			: GLOBAL4         $13 - Global4
+#			: GLOBAL5         $14 - Global5
+#			: ENABLE_IMPACT   $15 
+#			: ONLY_IMPACT     $16
+#
+#===============================================================================
+
+mysub() {
+str="$1"
+rev=`echo $str | awk '{
+for(i=length($0);i>=1;i--)
+printf("%s",substr($0,i,1));
+}'`
+TMP=`echo $rev | cut -d'_' -f3-`
+unset rev
+str=$TMP
+rev=`echo $str | awk '{
+for(i=length($0);i>=1;i--)
+printf("%s",substr($0,i,1));
+}'`
+echo $rev
+}
+
+# for debug enable the following two commands
+# exit after the first error
+#set -e
+
+# print all commands to the log file
+#set -x
+
+# setting local parameters
+
+MODE="UPLOAD"
+export MODE
+
+APPS_LOGON=$1
+export APPS_LOGON
+. $XXPCK_TOP/bin/setenv.sh
+
+$SQLPLUS $APPS_LOGON <<!!
+select fnd_profile.value('XXPCK_PRODUCT_VERSION') "Product Version" from dual
+/
+exit
+!!
+
+APPS_USERID=$2
+export APPS_USERID
+
+APPS_USERNAME=$3
+export APPS_USERNAME
+
+APPS_CONCID=$4
+export APPS_CONCID
+
+PKG_FILE_NAME=$5
+export PKG_FILE_NAME
+
+WORK_DIR=$6"/"
+export WORK_DIR
+
+INBOUND_DIR=$7
+export INBOUND_DIR
+
+TARGET_HOST=$8
+export TARGET_HOST
+
+DOWNLOAD_HOST=$9
+export DOWNLOAD_HOST
+
+GLOBAL1=${10}
+export GLOBAL1
+
+GLOBAL2=${11}
+export GLOBAL2
+
+GLOBAL3=${12}
+export GLOBAL3
+
+GLOBAL4=${13}
+export GLOBAL4
+
+GLOBAL5=${14}
+export GLOBAL5
+
+ENABLE_IMPACT=${15}
+export ENABLE_IMPACT
+
+ONLY_IMPACT=${16}
+export ONLY_IMPACT
+
+DB_USER=`echo $APPS_LOGON | $AWK '{print substr($0,1,index($0,"/")-1)}'`
+export DB_USER
+
+DB_PWD=`echo $APPS_LOGON | $AWK '{print substr($0,index($0,"/")+1)}'`
+export DB_PWD
+
+ORIG_CLASSPATH=$ORIG_CLASSPATH
+export ORIG_CLASSPATH
+
+SUBSTRING='/'
+FILENAME=`echo ${PKG_FILE_NAME##*$SUBSTRING} | $AWK -F"\"" '{ print $1 }'`
+echo "File Name is: "$FILENAME
+
+PKG_NAME=$(mysub $FILENAME)
+echo "Package Name: $PKG_NAME"
+export PKG_NAME
+
+SERVICE_NAME=$SERVICE_NAME
+export SERVICE_NAME
+
+echo "------------------------------------------------------------------------------"
+echo "|   Parameters :"
+echo "|     APPS_LOGON    = "$DB_USER"/***********"
+echo "|     APPS_USERID   = "$APPS_USERID
+echo "|     APPS_USERNAME = "$APPS_USERNAME
+echo "|     APPS_CONCID   = "$APPS_CONCID
+echo "|     PKG_FILE_NAME = "$PKG_FILE_NAME
+echo "|     WORK_DIR      = "$WORK_DIR
+echo "|     INBOUND_DIR   = "$INBOUND_DIR
+echo "|     TARGET_HOST   = "$TARGET_HOST
+echo "|     DOWNLOAD_HOST = "$DOWNLOAD_HOST
+echo "|     GLOBAL1       = ********"
+echo "|     GLOBAL2       = ********"
+echo "|     GLOBAL3       = "$GLOBAL3
+echo "|     GLOBAL4       = "$GLOBAL4
+echo "|     GLOBAL5       = "$GLOBAL5
+echo "|     ENABLE_IMPACT = "$ENABLE_IMPACT
+echo "|     ONLY_IMPACT   = "$ONLY_IMPACT
+echo "------------------------------------------------------------------------------"
+echo
+echo "Service Name: $SERVICE_NAME "
+
+
+#get encoding 
+ENCODING=`$SQLPLUS $APPS_LOGON << EOF
+set define off
+set head off
+select fnd_profile.value('ICX_CLIENT_IANA_ENCODING') from dual
+/
+EOF
+`
+
+ENCODING=`echo $ENCODING`
+
+# get responsibility name
+RESP_DATA=`$SQLPLUS $APPS_LOGON << EOF
+set define off
+set head off
+set verify off
+select res.responsibility_name||'%'||ap.APPLICATION_SHORT_NAME
+from fnd_concurrent_requests r, 
+     fnd_responsibility_vl res,
+     fnd_application_vl    ap
+where r.responsibility_id             = res.responsibility_id 
+and   r.responsibility_application_id = res.application_id 
+and   res.application_id              = ap.application_id 
+and   r.request_id = ${APPS_CONCID}
+/
+EOF
+`
+
+INSTANCE_NAME=`$SQLPLUS $APPS_LOGON << !!
+set head off
+select name from v\\$database
+/
+!!
+`
+
+INSTANCE_NAME=`echo $INSTANCE_NAME`
+export INSTANCE_NAME
+
+RESP_DATA=`echo $RESP_DATA`
+
+RESP_NAME=`echo $RESP_DATA | $AWK -F"%" '{print $1}'`
+RESP_NAME=`echo $RESP_NAME`
+
+RESP_APPL_SHORT_NAME=`echo $RESP_DATA | $AWK -F"%" '{print $2}'` 
+RESP_APPL_SHORT_NAME=`echo $RESP_APPL_SHORT_NAME`
+
+echo "Running under \"$RESP_NAME\" responsibility [${RESP_APPL_SHORT_NAME}]"
+
+cd $WORK_DIR
+
+APPS_VERSION_TMP=`$SQLPLUS $APPS_LOGON << EOF 
+set define off 
+set head off 
+set verify off
+set pagesize 0 
+set feedback off 
+set pause off 
+set linesize 200
+select substr(fpg.release_name,1,decode(instr(fpg.release_name,'.',1,3),0,length(fpg.release_name),instr(fpg.release_name,'.',1,3)-1)) apps_version
+from   fnd_product_groups fpg
+where  rownum = 1
+/ 
+EOF
+`
+
+APPS_VERSION=`echo $APPS_VERSION_TMP`
+R12=`echo $APPS_VERSION | grep 12.* | wc -l`
+if [ $R12 -eq 1 ]
+then
+   APPS_VERSION="12"
+fi;
+echo "APPS_VERSION="$APPS_VERSION
+export APPS_VERSION
+
+if [ "$APPCPNAM" = "REQID" ]
+then
+   REPORT=$APPLCSF/$APPLOUT/o$APPS_CONCID.out
+fi
+if [ "$APPCPNAM" = "USER" ]
+then
+   REPORT=$APPLCSF/$APPLOUT/${APPS_USERNAME}.out
+fi
+if [ "$APPCPNAM" = "USER.REQID" ]
+then
+   REPORT=$APPLCSF/$APPLOUT/${APPS_USERNAME}.${APPS_CONCID} 
+fi
+if [ "$APPCPNAM" = "" ]
+then
+   REPORT=$APPLCSF/$APPLOUT/o$APPS_CONCID.out
+fi
+
+TEMP_DIR=$WORK_DIR$APPS_CONCID
+export TEMP_DIR
+
+#
+# VCS Check ... 
+#
+VCS_CHK=`echo $PKG_FILE_NAME | $AWK -F":" '{ print $1 }'`
+if  [ "${VCS_CHK}" = "VCS" ] || [ "${VCS_CHK}" = "vcs" ] 
+then
+   PKG_FILE_NAME=`echo $PKG_FILE_NAME | $AWK -F":" '{ print $2 }'`
+   PRF=`$SQLPLUS $APPS_LOGON <<!!
+set head off
+set wrap off
+set line 50
+select fnd_profile.value('XXPCK_VCS_SYSTEM')||'%'||fnd_profile.value('XXPCK_VCS_OPERATING_SYSTEM') from dual
+/
+!!
+`
+
+   #
+   VCS_SYSTEM=`echo $PRF | $AWK -F"%" '{ print $1 }'`
+   VCS_SYSTEM=`echo $VCS_SYSTEM`
+   VCS_OPERATING_SYSTEM=`echo $PRF | $AWK -F"%" '{ print $2 }'`
+   VCS_OPERATING_SYSTEM=`echo $VCS_OPERATING_SYSTEM`
+   export VCS_SYSTEM
+   export VCS_OPERATING_SYSTEM
+   echo "Version Control System: ${VCS_SYSTEM} - ${VCS_OPERATING_SYSTEM} "
+   if [ "${VCS_SYSTEM}" != "" ] && [ "${VCS_OPERATING_SYSTEM}" != "" ] 
+   then
+      #
+      echo "Get Package file from Version Control System ..."
+      #
+      VCS_PACKAGE_PATH=$PKG_FILE_NAME
+      SUBSTRING='/'
+      PKG_FILE_NAME=`echo ${VCS_PACKAGE_PATH##*$SUBSTRING}`
+      echo "PKG_FILE_NAME: ${PKG_FILE_NAME}"
+      PARTIAL_PATH=`echo $VCS_PACKAGE_PATH | $AWK -F"$PKG_FILE_NAME" '{ print $1 }'`
+      echo "PARTIAL_PATH: ${PARTIAL_PATH}"
+      #if [ "$PARTIAL_PATH" != "" ]
+      #then
+      #   TOPDIR=`echo $PARTIAL_PATH |  $AWK -F"/" '{ print $1 }'`
+      #   echo "TOPDIR: ${TOPDIR}"
+      #fi
+      TAR_FILE_NAME=`echo $PKG_FILE_NAME |  $AWK -F"." '{ print $1 }'`
+      echo "TAR_FILE_NAME: ${TAR_FILE_NAME}"
+      export VCS_PACKAGE_PATH
+      export TAR_FILE_NAME
+      $XXPCK_TOP/bin/xxpck_check_out_package.sh
+      if [ $? -ne 0 ]
+      then
+         echo "Error: Cannot check in the package via VCS "
+         exit 1
+      fi
+   else
+      echo "Error: VCS System Not Defined "
+      exit 1
+   fi
+else   # else if [ "${VCS_CHK}" = "VCS" ]
+   #
+   echo "Get Package file from application server..."
+   #
+   $XXPCK_TOP/bin/FILEUPLOAD.sh '$XXPCK_TOP/uploads/packages' $PKG_FILE_NAME N $DOWNLOAD_HOST $DB_USER $DB_PWD DOWNLOAD TAR_FILE
+   if [ $? -ne 0 ]
+   then
+      echo "Error in Transfering the File"
+      exit 1
+   fi
+fi
+
+
+
+
+
+echo "cp ./$PKG_FILE_NAME $INBOUND_DIR"
+echo `pwd`
+cp ./$PKG_FILE_NAME $INBOUND_DIR
+
+# 
+# Move Temporary Directory to work/concurrent_request_number ...
+#
+TEMP_DIR=$WORK_DIR$APPS_CONCID
+export TEMP_DIR
+
+# creating temp directory
+echo "------------------------------------------------------------------------------"
+echo "|   Creating temp directory "$TEMP_DIR" ..."
+
+mkdir $APPS_CONCID
+cd $TEMP_DIR
+
+echo "|   Done."
+echo "------------------------------------------------------------------------------"
+echo
+
+# move the file to temp directory
+echo "------------------------------------------------------------------------------"
+echo "|   Copy the file to working directory ..."
+echo "| mv ${INBOUND_DIR}/${PKG_FILE_NAME} ${TEMP_DIR}/${PKG_FILE_NAME}"
+mv $INBOUND_DIR"/"$PKG_FILE_NAME $TEMP_DIR"/"$PKG_FILE_NAME
+if [ $? != "0" ]
+then
+   echo " ERROR!!! cant copy the package file : "$INBOUND_DIR"/"$PKG_FILE_NAME
+   exit 1
+fi
+echo "|   Done."
+echo "------------------------------------------------------------------------------"
+echo
+
+# Uncompress the tar file
+echo "------------------------------------------------------------------------------"
+echo "|   Uncompress the UMD Package ${PKG_FILE_NAME} ..."
+uncompress $PKG_FILE_NAME
+if [ $? != "0" ]
+then
+   echo " ERROR!!! cant uncompress file"
+   exit 1
+fi
+echo "|   Done."
+echo "------------------------------------------------------------------------------"
+echo
+
+# open the tar file
+echo "------------------------------------------------------------------------------"
+echo "| Extracting Tar File ${PKG_FILE_NAME} ..."
+TAR_FILE_NAME=`echo $PKG_FILE_NAME | $AWK '{print substr($0,1,length($0)-2)}'`
+export TAR_FILE_NAME
+echo "|   open the tar file ("$TAR_FILE_NAME") ..."
+tar xvf $TAR_FILE_NAME
+if [ $? != "0" ]
+then
+   echo " ERROR!!! cant open the tar file"
+   exit 1
+fi
+echo "|   Done."
+echo "------------------------------------------------------------------------------"
+echo ""
+
+#checksum
+CHECKSUM=`$SQLPLUS $DB_USER/$DB_PWD @$XXPCK_TOP/sql/xxpck_get_checksum.sql ${APPS_USERID}`
+CHECKSUM=`echo $CHECKSUM`
+if [ "${CHECKSUM}" = "Y" ]
+then
+   if [ -f checksum.chk ]
+   then
+      CHECKSUM_STATUS=`$JAVA_JRE unitask.oracle.apps.xxpck.checksum.PackageCheckSum check ${TAR_FILE_NAME}_CS`
+      if [ $? -ne 0 ] || [ "${CHECKSUM_STATUS}" = "DIFFERENT" ]
+      then
+         echo ""
+         echo " ERROR!!! Checksum failed" 
+         exit 1
+      fi
+      echo "  --------------"
+      echo " | Checksum OK |"
+      echo "  --------------"
+      echo ""
+      echo "| Extracting ${TAR_FILE_NAME}_CS ...."
+      tar xvf  ${TAR_FILE_NAME}_CS
+   else
+      echo ""
+      echo " ERROR!!! Cannot find checksum file"
+     exit 1
+   fi  
+else   # else if [ "${CHECKSUM}" = "Y" ]
+   if [ -f checksum.chk ]
+   then
+      echo "| Extracting ${TAR_FILE_NAME}_CS ..."
+      tar xvf  ${TAR_FILE_NAME}_CS
+   fi
+fi
+
+if [ $? -ne 0 ]
+then
+   echo " ERROR!!! Cannot open the tar file"
+   exit 1
+fi
+echo "|   Done."
+echo "------------------------------------------------------------------------------"
+echo
+
+# Used for Change Control System
+# get the line number where BEGIN XXPCK_PACKAGE_LINES starts
+echo "Extracting Change Control System reference"
+LINE_NUM=`grep -n "BEGIN XXPCK_PACKAGE_LINES" package.ldt | cut -d: -f1 | head -n 1`
+LINE_NUM=`echo $LINE_NUM`
+export LINE_NUM
+cat package.ldt | head -n $LINE_NUM >> packages.tmp
+ISSUE_ID=`cat packages.tmp | grep "ATTRIBUTE1"| grep -v "BASE" | head -n 1 | $AWK -F" " '{ print $3 }' | sed "s/\"/ /g"`
+REMARKS=`cat packages.tmp | grep "ATTRIBUTE2" | grep -v "BASE" | head -n 1 | $AWK -F" " '{ print $3 }' | sed "s/\"/ /g"`
+INST_NAME=`cat packages.tmp | grep "ATTRIBUTE4" | grep -v "BASE" | head -n 1 | $AWK -F" " '{ print $3 }' | sed "s/\"/ /g"`
+rm packages.tmp 2> /dev/null
+ISSUE_ID=`echo $ISSUE_ID`
+echo "Issue Id: "$ISSUE_ID
+echo "Remarks: "$REMARKS
+echo "Instance Reference: "$INST_NAME
+
+##PKG_NAME=`cat package.ldt | grep "BEGIN XXPCK_PACKAGE " | head -n 1 | $AWK -F" " '{ print $3 }' | sed "s/\"/ /g"`
+##PKG_NAME=`echo $PKG_NAME`
+##export PKG_NAME
+if [ -f rollback_package ]
+then
+   echo ""
+else
+# Rollback only if rollback files exists
+if [ -f ROLLBACK_UP* ] && [ -f ROLLBACK_DOWN* ]
+then
+   echo ""
+   echo "=============================== Creating Rollback Script ==================================="
+   echo ""
+   mkdir ROLLBACK_$APPS_CONCID
+   #upload package definition so it can be used later for impact analisys
+   FNDLOAD $APPS_LOGON 0 Y UPLOAD $XXPCK_TOP/import/afpckpkg.lct ./package.ldt -
+   cp ROLLBACK_DOWN* ROLLBACK_$APPS_CONCID
+   cp ROLLBACK_UP* ROLLBACK_$APPS_CONCID
+   cd ROLLBACK_$APPS_CONCID
+   ROLLBACK_DIR=`pwd`
+   touch rollback_package
+   CURR_DIR=$TEMP_DIR
+   #define new path for temporary directory
+   TEMP_DIR=`pwd`
+   export TEMP_DIR
+   DOWN_SCRIPT=`ls ROLLBACK_DOWN*`
+   cat $DOWN_SCRIPT | grep -v vcs_process_CVS_UNIX.sh | grep -v vcs_process_PVCS_NT.sh | grep -v vcs_process_PVCS_UNIX.sh | grep -v vcs_process_SVN_UNIX.sh | grep -v vcs_process_GIT_UNIX.sh | grep -v vcs_process_TFS_UNIX.sh | grep -v vcs_process_DIM_NT.sh | grep -v vcs_DIM_baseline.sh> $DOWN_SCRIPT.tmp
+   mv $DOWN_SCRIPT.tmp $DOWN_SCRIPT
+   chmod +x ./${DOWN_SCRIPT}
+   #execute rollback download script
+   ./$DOWN_SCRIPT "Y"
+   # if Rollback Script entity was used, execute rollback scripts
+   for rollback_file in *ROLLBACK_EXTRA_SCRIPT
+   do
+      if [ -f $rollback_file ]
+      then
+         chmod +x $rollback_file
+         echo $rollback_file  "$DB_USER" ****** ****** ***** "$GLOBAL3" "$GLOBAL4" "$GLOBAL5"
+         ./$rollback_file  "$DB_USER" "$DB_PWD" "$GLOBAL1" "$GLOBAL2" "$GLOBAL3" "$GLOBAL4" "$GLOBAL5"
+      fi
+   done;
+   CLASSPATH=.:$XXPCK_TOP/java/jar/xxpckDownloadReport.zip:$XXPCK_TOP/java/jar/collections.jar:$XXPCK_TOP/java/jar/jdbc12.jar:$XXPCK_TOP/java/jar/xxpckPdfUtils.jar:$CLASSPATH:$XXPCK_TOP/java/jar/dom.jar
+   export CLASSPATH
+   #run PDF reporter to get XML with current instance metadata
+   $JAVA_JRE -mx1024m unitask.epack.utils.PDFReporter "${JDBC}" $XXPCK_DB_PORT $TWO_TASK  $DB_PWD $DB_USER $PKG_NAME $XXPCK_TOP $REPORT $ROLLBACK_DIR $APPS_USERNAME
+   cp $REPORT $ROLLBACK_DIR/$APPS_CONCID.pdf
+   cp reportData.xml $CURR_DIR/currentInstanceData.xml
+   rm ROLLBACK_DOWN* 1> /dev/null 2> /dev/null
+   TAR_FILE_NAME=ROLLBACK_`echo $PKG_FILE_NAME | sed s/.Z/""/g`
+   tar cvf $TAR_FILE_NAME *
+   compress -f $TAR_FILE_NAME
+   cp ${TAR_FILE_NAME}.Z $XXPCK_TOP/rollback
+   TEMP_DIR=$CURR_DIR
+   export TEMP_DIR
+   # Upload the file to the application server
+   cd $XXPCK_TOP/rollback
+   echo "|   Upload the file to the application server ..."
+   ROLL_TARGET_DIR='$XXPCK_TOP/rollback'
+   COMP_CMD="cp $UPLOAD_DIR/${TAR_FILE_NAME}.Z $ROLL_TARGET_DIR/${TAR_FILE_NAME}.Z"
+   RES_FILE=./RES.$$
+   echo "$JAVA_JRE -mx1024m $SSL_PARAMS unitask.web.utils.MultiPartFormHandler \"$TARGET_HOST/OA_HTML/xxpck/xxpckUploadFile.jsp\"  \"filename=${TAR_FILE_NAME}.Z\" \"ExecuteCommand=$COMP_CMD\""
+   $JAVA_JRE -mx1024m $SSL_PARAMS unitask.web.utils.MultiPartFormHandler "$TARGET_HOST/OA_HTML/xxpck/xxpckUploadFile.jsp"  "filename=${TAR_FILE_NAME}.Z" "ExecuteCommand=$COMP_CMD" > $RES_FILE
+   status=$?
+   cat $RES_FILE
+   rm $RES_FILE 1> /dev/null 2> /dev/null
+   cd -
+   # out from rollback directory
+   cd ..
+   if [ "${ENABLE_IMPACT}" = "Y" ]
+   then
+      echo  "<?xml version=\"1.0\" encoding=\"$ENCODING\" ?>"  > $TEMP_DIR/reportData.xml.tmp
+      cat $TEMP_DIR/reportData.xml >> $TEMP_DIR/reportData.xml.tmp
+      echo  "<?xml version=\"1.0\" encoding=\"$ENCODING\" ?>" > $TEMP_DIR/currentInstanceData.xml.tmp
+      cat $TEMP_DIR/currentInstanceData.xml >> $TEMP_DIR/currentInstanceData.xml.tmp
+      mv $TEMP_DIR/reportData.xml.tmp $TEMP_DIR/reportData.xml
+      mv $TEMP_DIR/currentInstanceData.xml.tmp $TEMP_DIR/currentInstanceData.xml
+      # 
+      # create compare XML
+      # 
+      $JAVA_JRE -mx512m unitask.epack.utils.DiffReport $TEMP_DIR/reportData.xml $TEMP_DIR/currentInstanceData.xml $TEMP_DIR/compareResult.xml
+      if [ $? -ne 0 ]
+      then
+         echo "Error running \"Impact Analysis\" - create compare XML file"
+         COMPLETE_STATUS="Error"
+      fi
+      #copy XML files to $XXPCK_TOP/impact directory
+      cp $TEMP_DIR/reportData.xml $XXPCK_TOP/impact/sourceInstance_${APPS_CONCID}_.xml
+      cp $TEMP_DIR/currentInstanceData.xml $XXPCK_TOP/impact/targetInstance_${APPS_CONCID}_.xml
+      cp $TEMP_DIR/compareResult.xml $XXPCK_TOP/impact/result_${APPS_CONCID}_.xml
+      echo  "<?xml version=\"1.0\" encoding=\"$ENCODING\" ?>" > $XXPCK_TOP/impact/result_${APPS_CONCID}_.xml.tmp
+      cat $XXPCK_TOP/impact/result_${APPS_CONCID}_.xml >> $XXPCK_TOP/impact/result_${APPS_CONCID}_.xml.tmp
+      mv $XXPCK_TOP/impact/result_${APPS_CONCID}_.xml.tmp $XXPCK_TOP/impact/result_${APPS_CONCID}_.xml
+   fi   # end if [ "${ENABLE_IMPACT}" = "Y" ]
+fi      # end if [ -f ROLLBACK_UP* ] && [ -f ROLLBACK_DOWN* ]
+fi      # end if -f $rollback_package
+
+
+echo ""
+echo "============================== Rollback script - done ====================================="
+echo ""
+
+if [ "${ONLY_IMPACT}" != "Y" ]
+then
+   cd $TEMP_DIR
+   # running the upload commands script
+   echo "------------------------------------------------------------------------------"
+   set +e
+   UPLOAD_SCRIPT=`ls UP* 2> /dev/null` 
+   export UPLOAD_SCRIPT
+   echo "|   Running the Unitask Object Migration Manager package upload script : " $UPLOAD_SCRIPT " ..."
+   
+   rm *log 2> /dev/null
+   # if rollback upload script exists, execute it
+   ROLLBACK_UPLOAD_SCRIPT=`ls rollback_package 1> /dev/null 2> /dev/null`
+   ROLL_EXISTS=$?
+   if [ $ROLL_EXISTS -eq 0 ]
+   then
+      ROLLBACK_UPLOAD_SCRIPT=`ls ROLLBACK_UP*`
+      UPLOAD_SCRIPT=${ROLLBACK_UPLOAD_SCRIPT}
+   fi;
+   set -e
+   echo "Executing ... ${UPLOAD_SCRIPT} "
+   
+   chmod +x ./$UPLOAD_SCRIPT
+   ./$UPLOAD_SCRIPT
+   
+   if [ -f $TEMP_DIR/upload_tagging ]
+   then
+      chmod +x $TEMP_DIR/upload_tagging
+      $TEMP_DIR/upload_tagging
+      if [ -f $TEMP_DIR/vcs_tag_on_upload_tmpl.sh ]
+      then
+         chmod +x $TEMP_DIR/vcs_tag_on_upload_tmpl.sh
+         $TEMP_DIR/vcs_tag_on_upload_tmpl.sh
+      fi
+   fi
+   
+   if [ $? -ne 0 ]
+   then
+      echo " ERROR!!! cannot run " $UPLOAD_SCRIPT
+      exit 1
+   fi
+   echo "|   Done."
+   
+   if [ -f ROLLBACK_UP* ] && [ -f ROLLBACK_DOWN* ] && [ "${ENABLE_IMPACT}" = "Y" ]
+   then
+      echo "------------------------------------------------------------------------------"
+      echo
+      echo "|   Running Impact Analysis Report."
+      echo "------------------------------------------------------------------------------"
+      CONCSUB $APPS_LOGON $RESP_APPL_SHORT_NAME "$RESP_NAME" $APPS_USERNAME WAIT=Y CONCURRENT XXPCK XXPCK_IMPACT_ANALYSIS ${APPS_CONCID} Y
+   fi
+
+else    # else if ${ONLY_IMPACT}
+
+   if [ -f ROLLBACK_UP* ] && [ -f ROLLBACK_DOWN* ] && [ "${ENABLE_IMPACT}" = "Y" ]
+   then
+      CONCSUB $APPS_LOGON $RESP_APPL_SHORT_NAME "$RESP_NAME" $APPS_USERNAME WAIT=Y CONCURRENT XXPCK XXPCK_IMPACT_ANALYSIS ${APPS_CONCID} Y
+   fi
+   
+fi    # end if ${ONLY_IMPACT}" != "Y"
+
+echo "|   Done."
+echo "------------------------------------------------------------------------------"
+
+# update concurrent options
+if [ "${GLOBAL1}" = "" ]
+then
+   GLOBAL1="EMPTY_VALUE"
+fi
+if [ "${GLOBAL2}" = "" ]
+then
+   GLOBAL2="EMPTY_VALUE"
+fi
+$SQLPLUS ${APPS_LOGON} @$XXPCK_TOP/sql/clear_conc_params.sql "$GLOBAL1" "$GLOBAL2" "$APPS_CONCID"
+
+#-----------------------------------------------------------------------------------
+# "add line numbers to the log file"
+
+((COUNTER = 1))
+cat $APPLCSF/$APPLLOG/l$APPS_CONCID.req |while read NODENAME
+do
+   echo "$COUNTER  $NODENAME" >> ./log_${APPS_CONCID}.tmp
+   ((COUNTER = $(($COUNTER+1)) ))
+done;
+mv ./log_${APPS_CONCID}.tmp $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+
+#------------------------------------------------------------------------------------
+
+if [ "${ONLY_IMPACT}" != "Y" ]
+then
+
+   FAIL_PROG=`echo "select fnd_profile.value('XXPCK_FAIL_ON_ERROR') from dual;" | $SQLPLUS ${APPS_LOGON} @${XXPCK_TOP}/sql/util.sql`
+
+   COMPLETE_STATUS=`echo "Normal"`
+   export COMPLETE_STATUS
+
+   export CLASSPATH=$CLASSPATH:./:$XXPCK_TOP/java/jar/collections.jar:$XXPCK_TOP/java/jar/i18nAPI_v3.jar:$XXPCK_TOP/java/jar/jdbc12.jar:$XXPCK_TOP/java/jar/versioninfo.jar:$XXPCK_TOP/java/jar/xdocore.jar:$XXPCK_TOP/java/jar/xxpckPdfUtils.jar
+
+   if [ "$APPCPNAM" = "REQID" ]
+   then
+      REPORT=o${APPS_CONCID}.out
+   fi
+   if [ "$APPCPNAM" = "USER" ]
+   then
+      REPORT=${APPS_USERNAME}.out
+   fi
+   if [ "$APPCPNAM" = "USER.REQID" ]
+   then
+      REPORT=${APPS_USERNAME}.${APPS_CONCID} 
+   fi
+   if [ "$APPCPNAM" = "" ]
+   then
+      REPORT=o${APPS_CONCID}.out
+   fi
+   if [ "$APPLCSF" = "" ]
+   then
+      APPLCSF=$XXPCK_TOP
+   fi;
+
+   echo "$JAVA_JRE -mx1024m unitask.epack.utils.UploadReport \"${JDBC}\" $XXPCK_DB_PORT $TWO_TASK  $DB_PWD $DB_USER $PKG_FILE_NAME $APPS_CONCID $APPLCSF/$APPLLOG $APPLCSF/$APPLOUT $OA_MEDIA $APPS_USERNAME $REPORT >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+   $JAVA_JRE -mx1024m unitask.epack.utils.UploadReport "${JDBC}" $XXPCK_DB_PORT $TWO_TASK  $DB_PWD $DB_USER $PKG_FILE_NAME $APPS_CONCID $APPLCSF/$APPLLOG $APPLCSF/$APPLOUT $OA_MEDIA $APPS_USERNAME $REPORT >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+   if [ "$?" != "0" ]
+   then
+      COMPLETE_STATUS="Error"
+      echo "------------------------------------------------------------------------------"
+      echo "|"
+      echo "| Errors detected. Please view the output!!!"
+      echo "|"
+      echo "------------------------------------------------------------------------------"      
+   fi;
+
+   #
+   # Check for CCS Integration ...
+   #
+   echo "------------------------------------------------------------------------------" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+   echo "|" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+   echo "| Checking for CCS Integration ..." >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+   echo "|" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+
+   CCS_ENABLED=`echo "select fnd_profile.value('XXPCK_CCS_ENABLED') from dual;" | $SQLPLUS ${APPS_LOGON} @${XXPCK_TOP}/sql/util.sql`
+   CCS_ENABLED=`echo $CCS_ENABLED`
+   if [ "$CCS_ENABLED" = "Y" ]
+   then
+      # 
+      # Get CCS Profile Values ...
+      #
+      CCS_DETAILS=`echo "select XXPCK_CCS_UTILS.Get_CCS_Details(${APPS_USERID}) from dual;" | $SQLPLUS ${APPS_LOGON} @${XXPCK_TOP}/sql/util.sql`
+      CCS_DETAILS=`echo $CCS_DETAILS | sed 's/ +$//'`
+      CCS_HOST=`echo $CCS_DETAILS | $AWK -F"%" '{ print $1 }'`
+      CCS_HOST=`echo $CCS_HOST | sed 's/ +$//'`
+      if [ "$CCS_HOST" = "-1" ]
+      then
+         ERROR=`echo $CCS_DETAILS | $AWK -F"%" '{ print $2 }'`
+         echo "$ERROR" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+      fi
+      CCS_PORT=`echo $CCS_DETAILS | $AWK -F"%" '{ print $2 }'` 
+      CCS_SID=`echo $CCS_DETAILS | $AWK -F"%" '{ print $3 }'` 
+      CCS_USER=`echo $CCS_DETAILS | $AWK -F"%" '{ print $4 }'` 
+      CCS_PASS=`echo $CCS_DETAILS | $AWK -F"%" '{ print $5 }'` 
+      CUR_INSTANCE=`echo $CCS_DETAILS | $AWK -F"%" '{ print $6 }'` 
+      CCS_NAME=`echo $CCS_DETAILS | $AWK -F"%" '{ print $7 }'` 
+      ### DEBUG ### echo "| CCS_DETAILS = $CCS_DETAILS" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+
+      # 
+      # Force CCS Name to UPPER CASE ...
+      #
+      CCS_NAME=`echo $CCS_NAME | tr '[a-z]' '[A-Z]'`
+      echo "| CCS Name: $CCS_NAME" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+
+      #
+      # Serena CM Dimensions ...
+      #
+      if [ "$CCS_NAME" = "CM" ]
+      then
+         echo "| HOST = $CCS_HOST" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+         #echo "| PORT = $CCS_PORT"
+         echo "| SID = $CCS_SID" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+         ## User and Password are defined within stored packages and it uses the VCS profile values
+         ## echo "| USER = $CCS_USER" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+         ## echo "| PASS = $CCS_PASS" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+         CM_DETAILS=`echo "select XXPCK.XXPCK_CM_UTILS.Get_CM_Details(${APPS_USERID}) from dual;" | $SQLPLUS ${APPS_LOGON} @${XXPCK_TOP}/sql/util.sql`
+         CM_DETAILS=`echo $CM_DETAILS | sed 's/ +$//'`
+         CCS_ATTRIB=`echo $CM_DETAILS | $AWK -F"%" '{ print $8 }'`
+         CCS_ATTRIB_TYPE=`echo $CM_DETAILS | $AWK -F"%" '{ print $9 }'`
+         CCS_STATE_DOWNLOAD=`echo $CM_DETAILS | $AWK -F"%" '{ print $10 }'`
+         CCS_STATE_UPLOAD=`echo $CM_DETAILS | $AWK -F"%" '{ print $11 }'`
+         CCS_PROJECT=`echo $CM_DETAILS | $AWK -F"%" '{ print $12 }'`
+         CCS_CR_PKG_NAME_ATTRIB=`echo $CM_DETAILS | $AWK -F"%" '{ print $13 }'`
+         CCS_CR_UMD_RESULTS_ATTRIB=`echo $CM_DETAILS | $AWK -F"%" '{ print $14 }'`
+         echo "| ATTRIB = $CCS_ATTRIB" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+         echo "| ATTRIB_TYPE = $CCS_ATTRIB_TYPE" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+         echo "| STATE_DOWNLOAD = $CCS_STATE_DOWNLOAD" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+         echo "| STATE_UPLOAD = $CCS_STATE_UPLOAD" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+         echo "| PROJECT = $CCS_PROJECT" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+         echo "| CR_PKG_NAME_ATTRIB = $CCS_CR_PKG_NAME_ATTRIB"
+         echo "| CR_UMD_RESULTS_ATTRIB = $CCS_CR_UMD_RESULTS_ATTRIB"
+         #echo "| Issue Id: $ISSUE_ID" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+         #echo "| Remarks: $REMARKS" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+         #echo "| APPS UserId = ${APPS_USERID}" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+         echo "| Package Name = ${PKG_NAME} " >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+         echo "| Concurrent Request = ${APPS_CONCID} " >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+         #
+         # Change Request State ...
+         #
+         if [ "${CCS_STATE_UPLOAD}" != "" ]
+         then
+            echo "| " >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+            echo "| Updating State ..." >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+            echo "| select xxpck.xxpck_cm_utils.change_state('${PKG_NAME}','${APPS_CONCID}','UPLOAD') from dual;" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+            TMP=`echo "select xxpck.xxpck_cm_utils.change_state('${PKG_NAME}','${APPS_CONCID}','UPLOAD') from dual;" | $SQLPLUS ${APPS_LOGON}  @${XXPCK_TOP}/sql/util.sql`
+            echo "| Result: $TMP" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+         fi;
+         #
+         # Change Request Attribute Update with Concurrent Request URLs ...
+         #
+         if [ "${CCS_ATTRIB}" != "" ]
+         then
+            echo "| " >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+            echo "| Updating Links ..." >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+            [[ $TARGET_HOST != */ ]] && TARGET_HOST="$TARGET_HOST"/
+            echo "|select xxpck.xxpck_cm_utils.update_attrib('${PKG_NAME}','${APPS_CONCID}','${TARGET_HOST}') from dual;" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req 
+            TMP=`echo "select xxpck.xxpck_cm_utils.update_attrib('${PKG_NAME}','${APPS_CONCID}','${TARGET_HOST}') from dual;" | $SQLPLUS ${APPS_LOGON}  @${XXPCK_TOP}/sql/util.sql`
+            echo "| Result: $TMP" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+         fi;
+         # 
+         # 
+         # 
+         # User Customizations ...
+         # 
+         # 
+         # 
+
+         # 
+         # Sample:  'DEFER_REASON','Other'
+         # Sample:  'RAISED_BY','${PKG_NAME}' 
+         # 
+
+         #
+         # Append UNITASK_RESULTS data ...
+         #
+         if [ "${CCS_CR_UMD_RESULTS_ATTRIB}" != "" ]
+         then
+            echo "|  " >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+            echo "| Appending UMD Results Information ..." >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+            TMP=`$SQLPLUS $APPS_LOGON <<!!
+set head off
+set wrap off
+set line 2000
+set serveroutput on
+declare
+   v_result       varchar2(400);
+   v_arr          owa_util.vc_arr;
+   l_out          varchar2(2000);
+begin
+   ----------------------------------------------------
+   -- 
+   -- Sample ...
+   --
+   --v_result := xxpck.xxpck_cm_utils.update_user_attrib('${PKG_NAME}','${APPS_CONCID}','SINGLE','RAISED_BY','${PKG_NAME}',v_arr);
+   --dbms_output.put_line('Result: '||v_result);
+   --
+   -----------------------------------------------------
+   --
+   -- Get Unitask Results Value from Change Request ...
+   --
+   xxpck.xxpck_cm_utils.cm_getRequest_Attribute(p_package => '${PKG_NAME}', p_requestid => '${APPS_CONCID}', p_attribute => '${CCS_CR_UMD_RESULTS_ATTRIB}', p_value => l_out);
+   --dbms_output.put_line(l_out);
+   --
+   -- Append existing value to New Unitask Results Value ...
+   --
+   v_result := xxpck.xxpck_cm_utils.update_user_attrib(
+      p_package => '${PKG_NAME}'
+    , p_requestid => '${APPS_CONCID}'
+    , p_attribute_type => 'SINGLE'
+    , p_attribute => '${CCS_CR_UMD_RESULTS_ATTRIB}'
+    , p_value => 'Package ${PKG_NAME} Uploaded ${APPS_CONCID} to '||sys_context('USERENV','DB_NAME')||' at '||to_char(sysdate,'YYYY-MM-DD HH24:MI:SS')||chr(10)||l_out
+    , p_array => v_arr
+   );
+   --
+   dbms_output.put_line('Result: '||v_result);
+end;
+/
+!!
+`
+
+            # 
+            echo "| Result: $TMP" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+         fi;
+         # 
+         # End of User Customizations ...   
+         #
+         echo "| " >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+         echo "| Done" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+      fi   # if [ "$CCS_NAME" = "CM" ]
+      
+      #
+      # TeamTrack ...
+      #
+      if [ "$CCS_NAME" = "TEAMTRACK" ] 
+      then
+         echo $ISSUE_ID | egrep '^[0-9]+$' >/dev/null 2>&1
+         if [ $? -eq 0 ] 
+         then
+            echo "| Updating TeamTrack Change Control System" >>  $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+            #echo "$JAVA_JRE -mx1024m unitask.oracle.apps.xxpck.scripts.TeamTrackHandler $CCS_HOST $CCS_PORT $CCS_SID $CCS_USER $CCS_PASS $CUR_INSTANCE $APPS_CONCID $COMPLETE_STATUS UPLOAD $APPS_USERNAME $APPLCSF/$APPLLOG/l$APPS_CONCID.req $APPLCSF/$APPLOUT/o$APPS_CONCID.out $ISSUE_ID $REMARKS"
+            $JAVA_JRE -mx1024m unitask.oracle.apps.xxpck.scripts.TeamTrackHandler $CCS_HOST $CCS_PORT $CCS_SID $CCS_USER $CCS_PASS $CUR_INSTANCE $APPS_CONCID $COMPLETE_STATUS UPLOAD $APPS_USERNAME $APPLCSF/$APPLLOG/l$APPS_CONCID.req $APPLCSF/$APPLOUT/$REPORORT $ISSUE_ID $REMARKS >> "$APPLCSF/$APPLLOG/l$APPS_CONCID.req"
+            echo "| Done" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+         else
+            echo "| Error!!!! Wrong issue id [$ISSUE_ID]" >> "$APPLCSF/$APPLLOG/l$APPS_CONCID.req"
+         fi
+      fi # end if TEAMTRACK
+      
+      # 
+      # Serena Mashup ...
+      # 
+      if [ "$CCS_NAME" = "MASHUP" ] || [ "$CCS_NAME" = "MASH UP" ]
+      then
+         echo "| Updating Mashup" >> "$APPLCSF/$APPLLOG/l$APPS_CONCID.req"
+         X=`echo $ISSUE_ID | grep "^[0-9]*:[0-9]*" | wc -l`
+         if [ $X -eq 0 ]
+         then
+            COMPLETE_STATUS="Error"
+            echo ""
+            echo "| Error: Wrong format for issue id [$ISSUE_ID]" >> "$APPLCSF/$APPLLOG/l$APPS_CONCID.req"
+         else
+            ISSUE_TABLE=`echo $ISSUE_ID | $AWK -F":" '{ print $1}'`
+            ISSUE_RECORD=`echo $ISSUE_ID | $AWK -F":" '{ print $2}'`
+            $JAVA_JRE -mx1024m unitask.oracle.apps.xxpck.mashup.MashupUtils "$CCS_USER" "$CCS_PASS" "$CCS_HOST" "$ISSUE_TABLE" "$ISSUE_RECORD" "$REMARKS" "$TWO_TASK" "$APPS_CONCID" "Completed $COMPLETE_STATUS" "UPLOAD" "$APPS_USERNAME"  "$APPLCSF/$APPLLOG/l$APPS_CONCID.req" "$APPLCSF/$APPLOUT/$REPORT" "${INST_NAME}" >> "$APPLCSF/$APPLLOG/l$APPS_CONCID.req"
+            echo "| Done" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+         fi
+      fi;
+      
+      # 
+      # AxoSoft ...
+      #
+      if [ "$CCS_NAME" = "AXOSOFT" ] && [ "${ISSUE_ID}" != "" ]
+      then
+         echo "| Updating AXOSOFT [Task: $ISSUE_ID]" >> "$APPLCSF/$APPLLOG/l$APPS_CONCID.req"
+         $JAVA_JRE -mx1024m unitask.oracle.apps.xxpck.scripts.AxosoftHandler "$CCS_PASS" "$CCS_HOST" "" "$APPS_CONCID" "$APPLCSF/$APPLLOG/l$APPS_CONCID.req" "$APPLCSF/$APPLOUT/$REPORT" "${INSTANCE_NAME}" "UPLOAD" "$APPS_USERNAME" "$COMPLETE_STATUS" "$ISSUE_ID" >> "$APPLCSF/$APPLLOG/l$APPS_CONCID.req"
+         echo "| Done" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+      fi
+      
+      echo "|" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+      echo "------------------------------------------------------------------------------" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+
+   fi;   #end of CCS Enabled
+
+fi;   #end ${ONLY_IMPACT}" != "Y"
+
+# 
+# Create archive ...
+# 
+echo "------------------------------------------------------------------------------" >>  $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+echo "| Storing archive data...." >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+X=$((`echo "$PKG_FILE_NAME" | sed 's/[^_]//g' | wc -c` - 1 ))
+NEXT_SEQ=`echo $PKG_FILE_NAME | cut -d'_' -f$X`
+$SQLPLUS $APPS_LOGON  <<!!
+set serveroutput on
+exec xxpck_utils.Store_Archive('${PKG_NAME}',${NEXT_SEQ},'${VCS_ACTION}','${VCS_REMARKS}','${VCS_LABEL}',${APPS_CONCID},'UPLOAD');
+!!
+
+if [ $? -ne 0 ]
+then
+   COMPLETE_STATUS="Error"
+   echo ""
+   echo "Error storing archive data" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+   exit 1
+else
+   $SQLPLUS $APPS_LOGON @$XXPCK_TOP/sql/xxpck_update_arc.sql ${APPS_CONCID}
+fi
+
+#
+# Check for Packages with Notification ...
+#
+if [ -f @$TEMP_DIR/xxpck_notify_import.sql ]
+then
+   echo "| Sending Import Package Notification...." >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+   $SQLPLUS $APPS_LOGON @$TEMP_DIR/xxpck_notify_import.sql ${COMPLETE_STATUS} ${APPS_CONCID}
+   echo "| Notification Done." >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+   echo "| Done." >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+   echo "------------------------------------------------------------------------------" >>  $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+   echo
+else
+   #
+   # Check for System Profile Distribution List Value ...
+   #
+   echo "| Checking for Import Distribution List System Profile Value ..." >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+   UPLOAD_LIST=`$SQLPLUS $APPS_LOGON << EOF
+set define off
+set head off
+select fnd_profile.value('XXPCK_IMPORT_D_LIST') from dual
+/
+EOF
+`
+
+   UPLOAD_LIST=`echo $UPLOAD_LIST`
+   if [ "${UPLOAD_LIST}" != "" ] 
+   then 
+      echo "| Sending Email to Import Distribution List ${UPLOAD_LIST} ..." >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+      TMP_CMD=`$SQLPLUS $APPS_LOGON << EOF
+set define off
+set head off
+declare
+begin
+   for rec in (select adl.name, adl.to_recipients, adl.cc_recipients, adl.bcc_recipients
+     from alr_distribution_lists adl, fnd_application fa
+     where adl.application_id = fa.application_id
+     and fa.application_short_name = 'XXPCK'
+     and adl.name = (select fnd_profile.value('XXPCK_IMPORT_D_LIST') from dual)
+   ) loop
+      XXPCK_NOTIFICATION_UTIL.Send_Import_Notification(
+                            p_package_name    => '${PKG_NAME}',
+                            p_request_id      => '${APPS_CONCID}',
+                            p_dist_list_name  => rec.name,
+                            p_to_recepient    => rec.to_recipients,
+                            p_cc_recepient    => rec.cc_recipients,
+                            p_bcc_recepient   => rec.bcc_recipients,
+                            p_status          => '${COMPLETE_STATUS}'
+      );
+   end loop;
+end;
+/
+EOF
+`
+
+      echo "| Results: ${TMP_CMD}" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+   else 
+      echo "| Skipping Notification ... " >>  $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+   fi
+fi
+
+
+echo "------------------------------------------------------------------------------" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+echo "|" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+echo "| Complete!!!" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+echo "|" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+echo "------------------------------------------------------------------------------" >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+
+# Remove temp directory and scripts
+echo "------------------------------------------------------------------------------"
+echo "| Removing temp directory ..." >> $APPLCSF/$APPLLOG/l$APPS_CONCID.req
+if [ -d "${TEMP_DIR}" ]
+then
+   cd $XXPCK_TOP/work
+   rm -rf $TEMP_DIR 1> /dev/null 2> /dev/null
+   rm $XXPCK_TOP/work/${PKG_FILE_NAME} 1> /dev/null 2> /dev/null
+fi
+
+if [ $COMPLETE_STATUS = "Error" ]
+then
+   exit 255
+fi;
+
+exit 0
